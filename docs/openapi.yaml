@@ -1,0 +1,1064 @@
+openapi: 3.0.3
+info:
+  title: Auto Scan API
+  description: 扫描设备自动任务系统API - 前后端分离架构
+  version: 1.0.0
+  contact:
+    name: Auto Scan Team
+
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local development server
+
+# 标签分类
+tags:
+  - name: 设备管理
+    description: 扫描仪设备的发现、注册、监控
+  - name: 任务管理
+    description: 扫描任务的创建、执行、监控
+  - name: 文件管理
+    description: 扫描文件的管理、下载、预览
+  - name: 系统管理
+    description: 系统配置、日志、状态监控
+
+# 组件定义
+components:
+  schemas:
+    # 基础响应结构
+    BaseResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          description: 业务状态码
+          example: 0
+        message:
+          type: string
+          description: 状态信息
+          example: success
+        data:
+          type: object
+          description: 响应数据
+      required:
+        - code
+        - message
+
+    # 分页请求
+    PaginationRequest:
+      type: object
+      properties:
+        page:
+          type: integer
+          description: 当前页码
+          default: 1
+          example: 1
+        pageSize:
+          type: integer
+          description: 每页数量
+          default: 20
+          maximum: 100
+          example: 20
+
+    # 分页响应
+    PaginationResponse:
+      type: object
+      properties:
+        page:
+          type: integer
+          example: 1
+        pageSize:
+          type: integer
+          example: 20
+        total:
+          type: integer
+          example: 100
+        totalPages:
+          type: integer
+          example: 5
+
+    # 设备信息
+    Device:
+      type: object
+      properties:
+        id:
+          type: string
+          description: 设备唯一标识
+          example: dev_hp_750_001
+        name:
+          type: string
+          description: 设备名称
+          example: HP Smart Tank 750
+        ipAddress:
+          type: string
+          description: IP地址
+          example: 192.168.3.11
+        protocol:
+          type: string
+          description: 协议类型
+          enum: [escl, wsd]
+          example: escl
+        model:
+          type: string
+          description: 设备型号
+          example: Smart Tank 750 series
+        vendor:
+          type: string
+          description: 厂商
+          enum: [HP, Canon, Ricoh, Fujitsu, Brother, Epson]
+          example: HP
+        status:
+          type: string
+          description: 设备状态
+          enum: [online, offline, busy, error]
+          example: online
+        capabilities:
+          type: object
+          description: 设备能力信息
+          properties:
+            maxResolution:
+              type: integer
+              example: 1200
+            colorModes:
+              type: array
+              items:
+                type: string
+              example: [Color, Grayscale, BW]
+            supportsADF:
+              type: boolean
+              example: true
+            maxPages:
+              type: integer
+              example: 35
+        lastSeen:
+          type: string
+          format: date-time
+          description: 最后在线时间
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - ipAddress
+        - protocol
+        - status
+
+    # 创建设备请求
+    CreateDeviceRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: 设备名称
+          maxLength: 100
+        ipAddress:
+          type: string
+          description: IP地址
+          pattern: '^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
+        protocol:
+          type: string
+          enum: [escl, wsd]
+          default: escl
+        config:
+          type: object
+          description: 额外配置参数
+      required:
+        - name
+        - ipAddress
+
+    # 设备状态
+    DeviceStatus:
+      type: object
+      properties:
+        deviceId:
+          type: string
+        status:
+          type: string
+          enum: [online, offline, busy, error]
+        adfStatus:
+          type: string
+          enum: [empty, loaded, scanning]
+        scannerState:
+          type: string
+          enum: [idle, processing]
+        currentTask:
+          type: string
+          description: 当前任务ID
+        lastError:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    # 扫描任务
+    ScanTask:
+      type: object
+      properties:
+        id:
+          type: string
+          description: 任务唯一标识
+        deviceId:
+          type: string
+          description: 设备ID
+        status:
+          type: string
+          enum: [pending, running, paused, completed, failed, cancelled]
+          example: running
+        priority:
+          type: integer
+          description: 优先级（1-10，数字越小优先级越高）
+          minimum: 1
+          maximum: 10
+          default: 5
+        settings:
+          type: object
+          description: 扫描设置
+          properties:
+            resolution:
+              type: integer
+              enum: [75, 100, 150, 200, 300, 400, 600]
+              default: 300
+            colorMode:
+              type: string
+              enum: [Color, Grayscale, BW]
+              default: Color
+            format:
+              type: string
+              enum: [JPEG, PDF]
+              default: JPEG
+        progress:
+          type: integer
+          description: 进度百分比
+          minimum: 0
+          maximum: 100
+        totalPages:
+          type: integer
+          description: 总页数
+        scannedPages:
+          type: integer
+          description: 已扫描页数
+        result:
+          type: object
+          description: 扫描结果
+          properties:
+            files:
+              type: array
+              items:
+                type: string
+              description: 文件ID列表
+            storagePath:
+              type: string
+        errorMessage:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+
+    # 创建任务请求
+    CreateTaskRequest:
+      type: object
+      properties:
+        deviceId:
+          type: string
+          description: 设备ID
+        priority:
+          type: integer
+          default: 5
+        settings:
+          type: object
+          properties:
+            resolution:
+              type: integer
+              default: 300
+            colorMode:
+              type: string
+              default: Color
+            format:
+              type: string
+              default: JPEG
+      required:
+        - deviceId
+
+    # 扫描文件
+    ScanFile:
+      type: object
+      properties:
+        id:
+          type: string
+        taskId:
+          type: string
+        deviceId:
+          type: string
+        filename:
+          type: string
+        originalName:
+          type: string
+        filePath:
+          type: string
+        fileSize:
+          type: integer
+          description: 文件大小（字节）
+        checksum:
+          type: string
+          description: Blake3校验和
+        pageNumber:
+          type: integer
+        width:
+          type: integer
+        height:
+          type: integer
+        format:
+          type: string
+          enum: [JPEG, PDF]
+        createdAt:
+          type: string
+          format: date-time
+
+    # 系统状态
+    SystemStatus:
+      type: object
+      properties:
+        version:
+          type: string
+          example: 1.0.0
+        uptime:
+          type: integer
+          description: 运行时间（秒）
+        devices:
+          type: object
+          properties:
+            total:
+              type: integer
+            online:
+              type: integer
+            busy:
+              type: integer
+        tasks:
+          type: object
+          properties:
+            running:
+              type: integer
+            queued:
+              type: integer
+            completed:
+              type: integer
+        storage:
+          type: object
+          properties:
+            total:
+              type: integer
+              description: 总容量（字节）
+            used:
+              type: integer
+              description: 已使用（字节）
+            free:
+              type: integer
+              description: 剩余（字节）
+
+    # 审计日志
+    AuditLog:
+      type: object
+      properties:
+        id:
+          type: integer
+        timestamp:
+          type: string
+          format: date-time
+        level:
+          type: string
+          enum: [debug, info, warning, error]
+        eventType:
+          type: string
+          example: device.scan.started
+        userId:
+          type: string
+        deviceId:
+          type: string
+        taskId:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+        ipAddress:
+          type: string
+
+    # 错误响应
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 400001
+        error:
+          type: string
+          example: INVALID_REQUEST
+        message:
+          type: string
+          example: Request parameter validation failed
+        details:
+          type: object
+          description: 详细错误信息
+
+# 路径定义
+paths:
+  # ========== 设备管理 ==========
+  /devices:
+    get:
+      summary: 获取设备列表
+      description: 分页获取所有扫描设备列表
+      tags:
+        - 设备管理
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [online, offline, busy, error]
+        - name: vendor
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/BaseResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/Device'
+                          pagination:
+                            $ref: '#/components/schemas/PaginationResponse'
+
+    post:
+      summary: 添加设备
+      description: 手动添加扫描设备
+      tags:
+        - 设备管理
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDeviceRequest'
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/BaseResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Device'
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /devices/discover:
+    post:
+      summary: 发现设备
+      description: 触发网络扫描，发现局域网内的扫描设备
+      tags:
+        - 设备管理
+      responses:
+        '200':
+          description: 发现完成
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/BaseResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          found:
+                            type: integer
+                            description: 发现的设备数量
+                          devices:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/Device'
+
+  /devices/{deviceId}:
+    parameters:
+      - name: deviceId
+        in: path
+        required: true
+        schema:
+          type: string
+
+    get:
+      summary: 获取设备详情
+      description: 获取指定设备的详细信息
+      tags:
+        - 设备管理
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/BaseResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Device'
+        '404':
+          description: 设备不存在
+
+    put:
+      summary: 更新设备
+      description: 更新设备信息
+      tags:
+        - 设备管理
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDeviceRequest'
+      responses:
+        '200':
+          description: 更新成功
+
+    delete:
+      summary: 删除设备
+      description: 从系统中移除设备
+      tags:
+        - 设备管理
+      responses:
+        '204':
+          description: 删除成功
+
+  /devices/{deviceId}/status:
+    parameters:
+      - name: deviceId
+        in: path
+        required: true
+        schema:
+          type: string
+
+    get:
+      summary: 获取设备状态
+      description: 获取设备的实时状态
+      tags:
+        - 设备管理
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/BaseResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/DeviceStatus'
+
+  /devices/{deviceId}/connect:
+    parameters:
+      - name: deviceId
+        in: path
+        required: true
+        schema:
+          type: string
+
+    post:
+      summary: 连接设备
+      description: 尝试与设备建立连接
+      tags:
+        - 设备管理
+      responses:
+        '200':
+          description: 连接成功
+        '503':
+          description: 设备不可达
+
+  /devices/{deviceId}/disconnect:
+    parameters:
+      - name: deviceId
+        in: path
+        required: true
+        schema:
+          type: string
+
+    post:
+      summary: 断开设备
+      description: 断开与设备的连接
+      tags:
+        - 设备管理
+      responses:
+        '200':
+          description: 断开成功
+
+  # ========== 任务管理 ==========
+  /tasks:
+    get:
+      summary: 获取任务列表
+      description: 分页获取扫描任务列表
+      tags:
+        - 任务管理
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, running, completed, failed]
+        - name: deviceId
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/BaseResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/ScanTask'
+                          pagination:
+                            $ref: '#/components/schemas/PaginationResponse'
+
+    post:
+      summary: 创建扫描任务
+      description: 创建新的扫描任务
+      tags:
+        - 任务管理
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTaskRequest'
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/BaseResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ScanTask'
+
+  /tasks/{taskId}:
+    parameters:
+      - name: taskId
+        in: path
+        required: true
+        schema:
+          type: string
+
+    get:
+      summary: 获取任务详情
+      description: 获取扫描任务的详细信息
+      tags:
+        - 任务管理
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/BaseResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ScanTask'
+
+    delete:
+      summary: 取消任务
+      description: 取消正在执行或等待中的任务
+      tags:
+        - 任务管理
+      responses:
+        '200':
+          description: 取消成功
+
+  /tasks/{taskId}/progress:
+    parameters:
+      - name: taskId
+        in: path
+        required: true
+        schema:
+          type: string
+
+    get:
+      summary: 获取任务进度
+      description: 获取扫描任务的实时进度
+      tags:
+        - 任务管理
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/BaseResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          taskId:
+                            type: string
+                          progress:
+                            type: integer
+                          scannedPages:
+                            type: integer
+                          totalPages:
+                            type: integer
+                          currentFile:
+                            type: string
+                          status:
+                            type: string
+
+  # ========== 文件管理 ==========
+  /files:
+    get:
+      summary: 获取文件列表
+      description: 分页获取扫描文件列表
+      tags:
+        - 文件管理
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: deviceId
+          in: query
+          schema:
+            type: string
+        - name: taskId
+          in: query
+          schema:
+            type: string
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/BaseResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/ScanFile'
+                          pagination:
+                            $ref: '#/components/schemas/PaginationResponse'
+
+  /files/{fileId}:
+    parameters:
+      - name: fileId
+        in: path
+        required: true
+        schema:
+          type: string
+
+    get:
+      summary: 获取文件详情
+      description: 获取扫描文件的详细信息
+      tags:
+        - 文件管理
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/BaseResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ScanFile'
+
+    delete:
+      summary: 删除文件
+      description: 删除扫描文件
+      tags:
+        - 文件管理
+      responses:
+        '204':
+          description: 删除成功
+
+  /files/{fileId}/download:
+    parameters:
+      - name: fileId
+        in: path
+        required: true
+        schema:
+          type: string
+
+    get:
+      summary: 下载文件
+      description: 下载扫描文件，支持断点续传
+      tags:
+        - 文件管理
+      parameters:
+        - name: Range
+          in: header
+          schema:
+            type: string
+          description: 字节范围（如 bytes=0-1023）
+      responses:
+        '200':
+          description: 下载成功
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '206':
+          description: 部分内容（断点续传）
+
+  /files/batch/download:
+    post:
+      summary: 批量下载
+      description: 批量下载文件，打包为ZIP
+      tags:
+        - 文件管理
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fileIds:
+                  type: array
+                  items:
+                    type: string
+              required:
+                - fileIds
+      responses:
+        '200':
+          description: 下载成功
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+
+  /files/batch/delete:
+    post:
+      summary: 批量删除
+      description: 批量删除扫描文件
+      tags:
+        - 文件管理
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fileIds:
+                  type: array
+                  items:
+                    type: string
+              required:
+                - fileIds
+      responses:
+        '200':
+          description: 删除成功
+
+  # ========== 系统管理 ==========
+  /system/status:
+    get:
+      summary: 获取系统状态
+      description: 获取系统运行状态和统计信息
+      tags:
+        - 系统管理
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/BaseResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SystemStatus'
+
+  /system/logs:
+    get:
+      summary: 获取审计日志
+      description: 分页获取系统审计日志
+      tags:
+        - 系统管理
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: level
+          in: query
+          schema:
+            type: string
+            enum: [debug, info, warning, error]
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/BaseResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/AuditLog'
+                          pagination:
+                            $ref: '#/components/schemas/PaginationResponse'
+
+  /system/config:
+    get:
+      summary: 获取系统配置
+      description: 获取系统当前配置
+      tags:
+        - 系统管理
+      responses:
+        '200':
+          description: 成功
+
+    put:
+      summary: 更新系统配置
+      description: 更新系统配置
+      tags:
+        - 系统管理
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 更新成功
+
+# WebSocket实时通知
+  /ws:
+    get:
+      summary: WebSocket连接
+      description: |
+        建立WebSocket连接，接收实时事件通知。
+        连接后发送订阅消息：
+        ```json
+        {
+          "action": "subscribe",
+          "channels": ["device.events", "task.progress"]
+        }
+        ```
+      tags:
+        - 实时通知
+      responses:
+        '101':
+          description: 切换协议成功
