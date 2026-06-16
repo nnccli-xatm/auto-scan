@@ -32,7 +32,14 @@ const (
 	ProtocolWSD  = "wsd"
 )
 
-// Vendor 厂商常量
+// DeviceCapabilities 设备能力（JSON序列化/反序列化的结构）
+type DeviceCapabilities struct {
+	SupportsADF  bool     `json:"supports_adf"`
+	FeederCapacity int    `json:"feeder_capacity,omitempty"`
+	Resolutions  []int    `json:"resolutions,omitempty"`
+	ColorModes   []string `json:"color_modes,omitempty"`
+}
+
 const (
 	VendorHP       = "HP"
 	VendorCanon    = "Canon"

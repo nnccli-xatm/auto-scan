@@ -97,7 +97,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Refresh, VideoPlay, List } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -110,7 +110,16 @@ const router = useRouter()
 
 const device = ref<Device | null>(null)
 const deviceStatus = ref<DeviceStatus | null>(null)
-const showScanDialog = ref(false)
+const isFlatbedOnly = computed(() => {
+    const caps = device.value?.capabilities
+    if (!caps) return false
+    try {
+      const capObj = JSON.parse(caps)
+      return capObj.supports_adf === false
+    } catch { return false }
+  })
+
+  const showScanDialog = ref(false)
 const scanning = ref(false)
 
 const scanForm = ref({
@@ -178,7 +187,13 @@ function statusText(status: string) {
   return map[status] || status
 }
 
-function adfText(status: string) {
+function adfTagType(status: string) {
+    if (isFlatbedOnly.value) return 'info'
+    if (status === 'ScannerAdfLoaded' || status === 'loaded') return 'success'
+    return 'info'
+  }
+
+  function adfText(status: string) {
   if (status === 'ScannerAdfLoaded' || status === 'loaded') return '已装入纸张'
   if (status === 'ScannerAdfEmpty' || status === 'empty') return '空'
   return status || '-'

@@ -27,27 +27,47 @@ func NewExecutor(log *logger.Logger) *Executor {
 }
 
 // ExecuteTask 执行任务扫描
+// 支持ADF输稿器和平板扫描两种输入源
+// - ADF设备（如HP 750）：检测到纸张后自动连续扫描多页
+// - 纯平板设备（如HP 4530）：单页扫描
 func (e *Executor) ExecuteTask(ctx context.Context, task *models.ScanTask, dev *models.Device, storagePath string, progressCallback func(progress int)) (*models.ScanResult, error) {
 	// 创建设备客户端
 	client := device.NewESCLClient(dev.IPAddress, 0)
 
-	// 等待ADF就绪
-	if err := e.waitForADF(ctx, client); err != nil {
-		return nil, utils.WrapError(utils.ErrCodeDeviceError, err, "ADF not ready")
+	// 获取设备能力，判断是否支持ADF
+	supportsADF, err := client.SupportsADFQuery(ctx)
+	if err != nil {
+		return nil, utils.WrapError(utils.ErrCodeDeviceError, err, "failed to query device capabilities")
 	}
 
 	// 解析扫描设置
 	settings := models.DefaultScanSettings
 	if task.Settings != "" {
-		// 解析JSON设置
 		// TODO: 实现JSON解析
+	}
+
+	// 强制修正输入源：
+	// - 纯平板设备 → InputSource固定为Platen
+	// - 带ADF设备 → 使用任务请求中指定的输入源（默认Feeder）
+	inputSource := settings.InputSource
+	if !supportsADF {
+		inputSource = "Platen" // HP 4530等平板设备强制用Platen
+	}
+
+	// 对于平板设备，不等待ADF，等待用户放好纸张后执行单页扫描
+	if supportsADF && (inputSource == "Feeder") {
+		if err := e.waitForADF(ctx, client); err != nil {
+			return nil, utils.WrapError(utils.ErrCodeDeviceError, err, "ADF not ready")
+		}
+	} else if inputSource == "Platen" {
+		e.logger.Info("Platen scan mode（无ADF依赖，直接创建扫描任务）")
 	}
 
 	// 创建eSCL设置
 	esclSettings := device.ScanSettings{
 		Version:       "2.63",
 		Intent:        "Document",
-		InputSource:   settings.InputSource,
+		InputSource:   inputSource, // 已根据设备类型修正
 		ColorMode:     settings.ColorMode,
 		XResolution:   settings.Resolution,
 		YResolution:   settings.Resolution,
@@ -67,7 +87,12 @@ func (e *Executor) ExecuteTask(ctx context.Context, task *models.ScanTask, dev *
 	pageCount := 0
 	var totalFileSize int64 = 0
 
-	for pageNum := 1; pageNum <= 100; pageNum++ { // 最多100页
+	maxPages := 1
+	if inputSource == "Feeder" {
+		maxPages = 100 // ADF连续扫描最多100页
+	}
+
+	for pageNum := 1; pageNum <= maxPages; pageNum++ {
 		// 检查上下文取消
 		select {
 		case <-ctx.Done():
@@ -76,9 +101,17 @@ func (e *Executor) ExecuteTask(ctx context.Context, task *models.ScanTask, dev *
 		default:
 		}
 
+		if pageNum > 1 {
+			// ADF连续模式：短暂等待下一张纸送入
+			time.Sleep(1 * time.Second)
+		}
+
 		// 尝试获取下一页
 		reader, err := client.GetNextDocument(ctx, jobURI)
 		if err != nil {
+			if pageNum == 1 {
+				return nil, utils.WrapError(utils.ErrCodeFileDownloadFailed, err, "failed to get scan result")
+			}
 			// 没有更多页面
 			break
 		}
@@ -97,12 +130,17 @@ func (e *Executor) ExecuteTask(ctx context.Context, task *models.ScanTask, dev *
 		totalFileSize += size
 
 		// 更新进度
-		progress := (pageCount * 100) / (pageCount + 1) // 估算进度
+		progress := (pageCount * 100) / (pageCount + 1)
 		if progressCallback != nil {
 			progressCallback(progress)
 		}
 
 		e.logger.Info("Downloaded page %d: %s (%d bytes)", pageNum, filename, size)
+
+		// 平板模式只扫描一页
+		if inputSource == "Platen" {
+			break
+		}
 	}
 
 	// 清理Job

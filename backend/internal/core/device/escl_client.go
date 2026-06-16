@@ -36,13 +36,18 @@ func NewESCLClient(ipAddress string, port int) *ESCLClient {
 
 // ScannerCapabilities 扫描仪能力信息
 type ScannerCapabilities struct {
-	XMLName    xml.Name `xml:"ScannerCapabilities"`
-	Version    string   `xml:"Version"`
-	MakeAndModel string `xml:"MakeAndModel"`
-	SerialNumber string `xml:"SerialNumber"`
-	Manufacturer string `xml:"Manufacturer"`
+	XMLName     xml.Name           `xml:"ScannerCapabilities"`
+	Version     string             `xml:"Version"`
+	MakeAndModel string            `xml:"MakeAndModel"`
+	SerialNumber string            `xml:"SerialNumber"`
+	Manufacturer string            `xml:"Manufacturer"`
 	Platen      PlatenCapabilities `xml:"Platen"`
-	ADF         ADFCapabilities    `xml:"Adf,omitempty"`
+	ADF         *ADFCapabilities   `xml:"Adf,omitempty"` // 指针类型，无ADF时为nil
+}
+
+// SupportsADF 检查是否支持自动输稿器
+func (c *ScannerCapabilities) SupportsADF() bool {
+	return c.ADF != nil
 }
 
 type PlatenCapabilities struct {
@@ -233,14 +238,60 @@ func (c *ESCLClient) DeleteJob(ctx context.Context, jobURI string) error {
 	return nil
 }
 
-// CheckADFLoaded 检查ADF是否有纸
+// CheckADFLoaded 检查ADF是否有纸（仅带ADF的设备可用）
+// 无ADF设备（如HP 4530）直接返回false
 func (c *ESCLClient) CheckADFLoaded(ctx context.Context) (bool, error) {
 	status, err := c.GetStatus(ctx)
 	if err != nil {
 		return false, err
 	}
-
 	return status.AdfState == "ScannerAdfLoaded", nil
+}
+
+// SupportsADFQuery 通过ScannerCapabilities判定该设备是否支持ADF
+func (c *ESCLClient) SupportsADFQuery(ctx context.Context) (bool, error) {
+	caps, err := c.GetCapabilities(ctx)
+	if err != nil {
+		return false, err
+	}
+	return caps.SupportsADF(), nil
+}
+
+// SupportsPlaten 平板扫描是否可用（所有eSCL设备都支持平板）
+func (c *ESCLClient) SupportsPlaten(ctx context.Context) (bool, error) {
+	caps, err := c.GetCapabilities(ctx)
+	if err != nil {
+		return false, err
+	}
+	return caps.Platen.PlatenInputCaps.MaxWidth > 0, nil
+}
+
+// WaitForJob 等待平板扫描任务结束（非ADF等待）
+func (c *ESCLClient) WaitForJob(ctx context.Context, jobURI string, timeout time.Duration) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	downloaded := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return downloaded, fmt.Errorf("timeout waiting for scan job")
+		default:
+		}
+
+		// 尝试直接获取NextDocument获取图片内容
+		reader, err := c.GetNextDocument(ctx, jobURI)
+		if err != nil {
+			// 任务还未就绪，继续等待
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		defer reader.Close()
+
+		downloaded++
+		// 成功后结束
+		return downloaded, nil
+	}
 }
 
 // WaitForADF 等待ADF加载纸张（带超时）

@@ -146,11 +146,16 @@ func (s *deviceService) DiscoverDevices(ctx context.Context) ([]*models.Device, 
 			Status:    models.DeviceStatusOnline,
 		}
 
-		// 尝试获取设备能力
+		// 尝试获取设备能力（含ADF检测）
 		client := device.NewESCLClient(d.IP, d.Port)
 		caps, err := client.GetCapabilities(ctx)
 		if err == nil {
-			dev.Capabilities = utils.ToJSON(caps)
+			dev.Capabilities = utils.ToJSON(map[string]interface{}{
+				"supports_adf":     caps.SupportsADF(),
+				"make_and_model":   caps.MakeAndModel,
+				"serial_number":    caps.SerialNumber,
+				"manufacturer":     caps.Manufacturer,
+			})
 		}
 
 		devices = append(devices, dev)
@@ -181,8 +186,13 @@ func (s *deviceService) AddDevice(ctx context.Context, req AddDeviceRequest) (*m
 	client := device.NewESCLClient(req.IPAddress, 0)
 	caps, err := client.GetCapabilities(ctx)
 	if err == nil {
+		dev.Capabilities = utils.ToJSON(map[string]interface{}{
+			"supports_adf":     caps.SupportsADF(),
+			"make_and_model":   caps.MakeAndModel,
+			"serial_number":    caps.SerialNumber,
+			"manufacturer":     caps.Manufacturer,
+		})
 		dev.Status = models.DeviceStatusOnline
-		dev.Capabilities = utils.ToJSON(caps)
 		dev.Model = caps.MakeAndModel
 
 		// 解析厂商
