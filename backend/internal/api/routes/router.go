@@ -2,6 +2,11 @@ package routes
 
 import (
 	"auto-scan/internal/api/handlers"
+	"auto-scan/internal/data/repository"
+	"auto-scan/internal/service/deviceservice"
+	"auto-scan/internal/service/systemservice"
+	"auto-scan/internal/service/taskservice"
+	"auto-scan/pkg/config"
 	"auto-scan/pkg/logger"
 	"database/sql"
 	"time"
@@ -11,10 +16,8 @@ import (
 )
 
 // SetupRouter 配置路由
-func SetupRouter(db *sql.DB, log *logger.Logger) *gin.Engine {
-	// 设置Gin模式
+func SetupRouter(db *sql.DB, log *logger.Logger, cfg *config.Config) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
-
 	router := gin.New()
 
 	// 全局中间件
@@ -22,82 +25,84 @@ func SetupRouter(db *sql.DB, log *logger.Logger) *gin.Engine {
 	router.Use(cors.Default())
 	router.Use(requestLogger(log))
 
+	// 初始化数据库层
+	repoDB := &repository.DB{DB: db}
+	deviceRepo := repository.NewDeviceRepository(repoDB)
+	taskRepo := repository.NewTaskRepository(repoDB)
+	fileRepo := repository.NewFileRepository(repoDB)
+
+	// 初始化Service层
+	deviceService, _ := deviceservice.NewDeviceService(deviceRepo, log)
+	taskService := taskservice.NewTaskService(taskRepo, deviceRepo, log)
+
+	cfgManager, _ := config.NewManager("config.yaml")
+	systemService := systemservice.NewSystemService(cfgManager, deviceRepo, taskRepo, fileRepo, log)
+
+	// 初始化Handler
+	h := handlers.NewHandler(deviceService, taskService, systemService)
+
 	// API v1 路由组
 	v1 := router.Group("/api/v1")
 	{
 		// 设备管理
-		deviceHandler := handlers.NewDeviceHandler()
 		devices := v1.Group("/devices")
 		{
-			devices.GET("", deviceHandler.ListDevices)
-			devices.POST("", deviceHandler.CreateDevice)
-			devices.POST("/discover", deviceHandler.DiscoverDevices)
-			devices.GET("/:id", deviceHandler.GetDevice)
-			devices.PUT("/:id", deviceHandler.UpdateDevice)
-			devices.DELETE("/:id", deviceHandler.DeleteDevice)
-			devices.GET("/:id/status", deviceHandler.GetDeviceStatus)
+			devices.GET("", h.ListDevices)
+			devices.POST("", h.CreateDevice)
+			devices.POST("/discover", h.DiscoverDevices)
+			devices.GET("/:id", h.GetDevice)
+			devices.PUT("/:id", h.UpdateDevice)
+			devices.DELETE("/:id", h.DeleteDevice)
+			devices.GET("/:id/status", h.GetDeviceStatus)
 		}
 
-		// TODO: 任务管理
+		// 任务管理
 		tasks := v1.Group("/tasks")
 		{
-			tasks.GET("")
-			tasks.POST("")
-			tasks.GET("/:id")
-			tasks.DELETE("/:id")
-			tasks.GET("/:id/progress")
+			tasks.GET("", h.ListTasks)
+			tasks.POST("", h.CreateTask)
+			tasks.GET("/:id", h.GetTask)
+			tasks.DELETE("/:id", h.CancelTask)
+			tasks.GET("/:id/progress", h.GetTaskProgress)
 		}
 
-		// TODO: 文件管理
+		// 文件管理
 		files := v1.Group("/files")
 		{
-			files.GET("")
-			files.GET("/:id")
-			files.DELETE("/:id")
-			files.GET("/:id/download")
-			files.POST("/batch-download")
-			files.POST("/batch-delete")
+			files.GET("", h.ListFiles)
+			files.GET("/:id", h.GetFile)
+			files.DELETE("/:id", h.DeleteFile)
+			files.GET("/:id/download", h.DownloadFile)
+			files.POST("/batch-download", h.BatchDownloadFiles)
+			files.POST("/batch-delete", h.BatchDeleteFiles)
 		}
 
-		// TODO: 系统管理
+		// 系统管理
 		system := v1.Group("/system")
 		{
-			system.GET("/status")
-			system.GET("/logs")
-			system.GET("/config")
-			system.PUT("/config")
+			system.GET("/status", h.GetSystemStatus)
+			system.GET("/logs", h.GetSystemLogs)
+			system.GET("/config", h.GetSystemConfig)
+			system.PUT("/config", h.UpdateSystemConfig)
 		}
 	}
 
 	return router
 }
 
-// requestLogger 请求日志中间件
 func requestLogger(log *logger.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		path := c.Request.URL.Path
 		raw := c.Request.URL.RawQuery
-
-		// 处理请求
 		c.Next()
-
-		// 记录日志
 		latency := time.Since(start)
 		clientIP := c.ClientIP()
 		method := c.Request.Method
 		statusCode := c.Writer.Status()
-
 		if raw != "" {
 			path = path + "?" + raw
 		}
-
-		log.Info("[%s] %s %s %d %v",
-			clientIP,
-			method,
-			path,
-			statusCode,
-			latency,
-		)
+		log.Info("[%s] %s %s %d %v", clientIP, method, path, statusCode, latency)
 	}
 }

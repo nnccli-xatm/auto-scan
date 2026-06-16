@@ -46,7 +46,7 @@ func main() {
 	defer db.Close()
 
 	// 初始化路由
-	router := routes.SetupRouter(db.DB, log)
+	router := routes.SetupRouter(db.DB, log, cfg)
 
 	// 创建HTTP服务器
 	srv := &http.Server{
