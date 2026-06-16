@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -160,17 +161,29 @@ func (c *ESCLClient) GetStatus(ctx context.Context) (*ScannerStatus, error) {
 	return &status, nil
 }
 
-// CreateScanJob 创建扫描任务
+// CreateScanJob 创建扫描任务（使用原始XML字符串避免命名空间问题）
 func (c *ESCLClient) CreateScanJob(ctx context.Context, settings ScanSettings) (string, error) {
-	url := fmt.Sprintf("%s/eSCL/ScanJobs", c.baseURL)
-
-	// 构建XML
-	xmlData, err := xml.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("marshal XML failed: %w", err)
+	ver := settings.Version
+	if ver == "" {
+		ver = "2.63"
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(xmlData))
+	rawXML := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
+  <pwg:Version>%s</pwg:Version>
+  <scan:Intent>%s</scan:Intent>
+  <scan:InputSource>%s</scan:InputSource>
+  <scan:ColorMode>%s</scan:ColorMode>
+  <scan:XResolution>%d</scan:XResolution>
+  <scan:YResolution>%d</scan:YResolution>
+  <pwg:DocumentFormat>%s</pwg:DocumentFormat>
+</scan:ScanSettings>`,
+		ver, settings.Intent, settings.InputSource, settings.ColorMode,
+		settings.XResolution, settings.YResolution, settings.DocumentFormat)
+
+	url := fmt.Sprintf("%s/eSCL/ScanJobs", c.baseURL)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBufferString(rawXML))
 	if err != nil {
 		return "", fmt.Errorf("create request failed: %w", err)
 	}
@@ -198,6 +211,9 @@ func (c *ESCLClient) CreateScanJob(ctx context.Context, settings ScanSettings) (
 
 // GetNextDocument 获取扫描的文档
 func (c *ESCLClient) GetNextDocument(ctx context.Context, jobURI string) (io.ReadCloser, error) {
+	if !strings.HasPrefix(jobURI, "http") {
+		jobURI = c.baseURL + jobURI
+	}
 	url := fmt.Sprintf("%s/NextDocument", jobURI)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -220,7 +236,11 @@ func (c *ESCLClient) GetNextDocument(ctx context.Context, jobURI string) (io.Rea
 
 // DeleteJob 删除扫描任务
 func (c *ESCLClient) DeleteJob(ctx context.Context, jobURI string) error {
-	req, err := http.NewRequestWithContext(ctx, "DELETE", jobURI, nil)
+	url := jobURI
+	if !strings.HasPrefix(url, "http") {
+		url = c.baseURL + url
+	}
+	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
 	if err != nil {
 		return fmt.Errorf("create request failed: %w", err)
 	}

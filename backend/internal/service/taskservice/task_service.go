@@ -418,6 +418,22 @@ func (s *TaskScheduler) Submit(task *models.ScanTask) error {
 	}
 }
 
+// cleanupOldJobs 清理扫描仪上的旧任务
+func (s *TaskScheduler) cleanupOldJobs(ctx context.Context, client *device.ESCLClient, status *device.ScannerStatus) error {
+	for _, job := range status.Jobs {
+		if job.JobState == "Completed" || job.JobState == "Aborted" || job.JobState == "Canceled" {
+			jobURL := job.JobURI
+			if err := client.DeleteJob(ctx, jobURL); err != nil {
+				if s.logger != nil {
+					s.logger.Warn("Failed to delete old job: %v", err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+
 // worker 工作协程
 func (s *TaskScheduler) worker() {
 	for {
@@ -460,11 +476,28 @@ func (s *TaskScheduler) executeTask(task *models.ScanTask) {
 		return
 	}
 
-	// 3. 创建设备客户端，检查设备状态
+	// 3. 创建设备客户端，检查设备状态并清理旧任务
 	client := device.NewESCLClient(dev.IPAddress, 0)
 	status, err := client.GetStatus(ctx)
-	if err != nil || status.State != "Idle" {
-		s.failTask(ctx, task, fmt.Errorf("device not ready: %v", err))
+	if err != nil {
+		s.failTask(ctx, task, fmt.Errorf("device unreachable: %w", err))
+		return
+	}
+
+	// 清理旧任务（防止409冲突）
+	s.cleanupOldJobs(ctx, client, status)
+
+	// 等待设备空闲
+	for retry := 0; retry < 30 && status.State != "Idle"; retry++ {
+		time.Sleep(1 * time.Second)
+		status, err = client.GetStatus(ctx)
+		if err != nil {
+			s.failTask(ctx, task, fmt.Errorf("device unresponsive: %w", err))
+			return
+		}
+	}
+	if status.State != "Idle" {
+		s.failTask(ctx, task, fmt.Errorf("device busy"))
 		return
 	}
 
@@ -484,7 +517,7 @@ func (s *TaskScheduler) executeTask(task *models.ScanTask) {
 	}
 
 	settings := device.ScanSettings{
-		Version:        "2.63",
+		Version:        "2.5",
 		Intent:         "Document",
 		InputSource:    inputSource,
 		ColorMode:      "RGB24",
