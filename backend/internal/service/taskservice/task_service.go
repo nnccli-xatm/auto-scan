@@ -577,6 +577,23 @@ func (s *TaskScheduler) executeTask(task *models.ScanTask) {
 			return io.Copy(f, reader)
 		}(); err == nil {
 			s.logger.Info("Downloaded page %d: %s (%d bytes)", pageNum, filename, size)
+			// 保存文件记录到数据库
+			if s.fileRepo != nil {
+				fileRecord := &models.ScanFile{
+					ID:         utils.GenerateUUID(),
+					TaskID:     task.ID,
+					DeviceID:   task.DeviceID,
+					Filename:   filename,
+					FilePath:   filepath,
+					FileSize:   size,
+					PageNumber: pageNum,
+					Format:     "JPEG",
+					Status:     "active",
+				}
+				if err := s.fileRepo.Create(ctx, fileRecord); err != nil {
+					s.logger.Warn("Failed to save file record: %v", err)
+				}
+			}
 		}
 		pageCount++
 		if inputSource == "Platen" {

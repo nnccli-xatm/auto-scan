@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"auto-scan/internal/data/models"
-	"auto-scan/internal/service/deviceservice"
+	"auto-scan/internal/data/repository"
+		"auto-scan/internal/service/deviceservice"
+	"auto-scan/internal/service/fileservice"
 	"auto-scan/internal/service/systemservice"
 	"auto-scan/internal/service/taskservice"
 	"auto-scan/pkg/utils"
@@ -18,14 +20,16 @@ type Handler struct {
 	DeviceService deviceservice.DeviceService
 	TaskService   taskservice.TaskService
 	SystemService systemservice.SystemService
+	FileService   *fileservice.FileService
 }
 
 // NewHandler 创建Handler容器
-func NewHandler(ds deviceservice.DeviceService, ts taskservice.TaskService, ss systemservice.SystemService) *Handler {
+func NewHandler(ds deviceservice.DeviceService, ts taskservice.TaskService, ss systemservice.SystemService, fs *fileservice.FileService) *Handler {
 	return &Handler{
 		DeviceService: ds,
 		TaskService:   ts,
 		SystemService: ss,
+		FileService:   fs,
 	}
 }
 
@@ -281,7 +285,29 @@ func (h *Handler) UpdateSystemConfig(c *gin.Context) {
 
 // ListFiles 获取文件列表
 func (h *Handler) ListFiles(c *gin.Context) {
-	utils.PaginationSuccess(c, []models.ScanFile{}, 1, 20, 0)
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+
+	if h.FileService == nil {
+		utils.PaginationSuccess(c, []models.ScanFile{}, page, pageSize, 0)
+		return
+	}
+
+	filter := repository.FileFilter{
+		DeviceID: c.Query("device_id"),
+		TaskID:   c.Query("task_id"),
+		Format:   c.Query("format"),
+		Page:     page,
+		PageSize: pageSize,
+	}
+
+	files, total, err := h.FileService.ListFiles(c.Request.Context(), filter)
+	if err != nil {
+		utils.InternalError(c, err.Error())
+		return
+	}
+
+	utils.PaginationSuccess(c, files, page, pageSize, total)
 }
 
 // GetFile 获取文件详情

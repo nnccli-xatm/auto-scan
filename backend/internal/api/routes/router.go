@@ -2,13 +2,14 @@ package routes
 
 import (
 	"auto-scan/internal/api/handlers"
+	"auto-scan/internal/core/scan"
 	"auto-scan/internal/data/repository"
 	"auto-scan/internal/service/deviceservice"
+	"auto-scan/internal/service/fileservice"
 	"auto-scan/internal/service/systemservice"
 	"auto-scan/internal/service/taskservice"
 	"auto-scan/pkg/config"
 	"auto-scan/pkg/logger"
-	"auto-scan/internal/core/scan"
 	"context"
 	"database/sql"
 	"time"
@@ -42,10 +43,12 @@ func SetupRouter(db *sql.DB, log *logger.Logger, cfg *config.Config) *gin.Engine
 	taskService.StartScheduler(context.Background())
 
 	cfgManager, _ := config.NewManager("config.yaml")
+	fileService := fileservice.NewFileService(fileRepo)
+
 	systemService := systemservice.NewSystemService(cfgManager, deviceRepo, taskRepo, fileRepo, log)
 
 	// 初始化Handler
-	h := handlers.NewHandler(deviceService, taskService, systemService)
+	h := handlers.NewHandler(deviceService, taskService, systemService, fileService)
 
 	// API v1 路由组
 	v1 := router.Group("/api/v1")
