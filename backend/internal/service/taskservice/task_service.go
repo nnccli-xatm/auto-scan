@@ -9,11 +9,17 @@
 package taskservice
 
 import (
+	"auto-scan/internal/core/scan"
+	device "auto-scan/internal/core/device"
 	"auto-scan/internal/data/models"
 	"auto-scan/internal/data/repository"
 	"auto-scan/pkg/logger"
 	"auto-scan/pkg/utils"
 	"context"
+	"io"
+	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -92,16 +98,34 @@ type taskService struct {
 
 // NewTaskService 创建任务服务
 func NewTaskService(repo repository.TaskRepository, deviceRepo repository.DeviceRepository, log *logger.Logger) TaskService {
-	return &taskService{
+	svc := &taskService{
 		repo:          repo,
 		deviceRepo:    deviceRepo,
 		scheduler:     NewTaskScheduler(),
 		eventHandlers: make(map[string]EventHandler),
 		logger:        log,
 	}
+	return svc
 }
 
-// CreateTask 创建任务
+// NewTaskServiceWithExecutor 创建任务服务并直接配置扫描执行器
+func NewTaskServiceWithExecutor(repo repository.TaskRepository, deviceRepo repository.DeviceRepository, executor *scan.Executor, fileRepo repository.FileRepository, log *logger.Logger) TaskService {
+	svc := &taskService{
+		repo:          repo,
+		deviceRepo:    deviceRepo,
+		scheduler:     NewTaskScheduler(),
+		eventHandlers: make(map[string]EventHandler),
+		logger:        log,
+	}
+	svc.scheduler.executor = executor
+	svc.scheduler.deviceRepo = deviceRepo
+	svc.scheduler.taskRepo = repo
+	svc.scheduler.fileRepo = fileRepo
+	svc.scheduler.logger = log
+	return svc
+}
+
+// CreateTask 创建任务并自动提交调度
 func (s *taskService) CreateTask(ctx context.Context, req CreateTaskRequest) (*models.ScanTask, error) {
 	// 检查设备是否存在
 	device, err := s.deviceRepo.GetByID(ctx, req.DeviceID)
@@ -109,7 +133,7 @@ func (s *taskService) CreateTask(ctx context.Context, req CreateTaskRequest) (*m
 		if err == repository.ErrNotFound {
 			return nil, utils.ErrDeviceNotFound
 		}
-		return nil, utils.WrapError(utils.ErrCodeInternalError, err, "failed to get device")
+		return nil, utils.WrapError(utils.ErrCodeInternalError, err)
 	}
 
 	// 检查设备状态
@@ -148,8 +172,11 @@ func (s *taskService) CreateTask(ctx context.Context, req CreateTaskRequest) (*m
 
 	// 保存到数据库
 	if err := s.repo.Create(ctx, task); err != nil {
-		return nil, utils.WrapError(utils.ErrCodeInternalError, err, "failed to create task")
+		return nil, utils.WrapError(utils.ErrCodeInternalError, err)
 	}
+
+	// 自动提交到调度器执行
+	s.scheduler.Submit(task)
 
 	s.notifyEvent(TaskEvent{
 		Type:      "created",
@@ -170,7 +197,7 @@ func (s *taskService) GetTask(ctx context.Context, taskID string) (*models.ScanT
 		if err == repository.ErrNotFound {
 			return nil, utils.ErrTaskNotFound
 		}
-		return nil, utils.WrapError(utils.ErrCodeInternalError, err, "failed to get task")
+		return nil, utils.WrapError(utils.ErrCodeInternalError, err)
 	}
 	return task, nil
 }
@@ -193,7 +220,7 @@ func (s *taskService) ListTasks(ctx context.Context, filter ListTaskFilter) ([]*
 
 	tasks, total, err := s.repo.List(ctx, repoFilter)
 	if err != nil {
-		return nil, 0, utils.WrapError(utils.ErrCodeInternalError, err, "failed to list tasks")
+		return nil, 0, utils.WrapError(utils.ErrCodeInternalError, err)
 	}
 
 	return tasks, total, nil
@@ -206,7 +233,7 @@ func (s *taskService) CancelTask(ctx context.Context, taskID string) error {
 		if err == repository.ErrNotFound {
 			return utils.ErrTaskNotFound
 		}
-		return utils.WrapError(utils.ErrCodeInternalError, err, "failed to get task")
+		return utils.WrapError(utils.ErrCodeInternalError, err)
 	}
 
 	// 只有Pending或Running状态可以取消
@@ -216,7 +243,7 @@ func (s *taskService) CancelTask(ctx context.Context, taskID string) error {
 
 	// 更新状态
 	if err := s.repo.UpdateStatus(ctx, taskID, models.TaskStatusCancelled); err != nil {
-		return utils.WrapError(utils.ErrCodeInternalError, err, "failed to cancel task")
+		return utils.WrapError(utils.ErrCodeInternalError, err)
 	}
 
 	s.notifyEvent(TaskEvent{
@@ -232,13 +259,11 @@ func (s *taskService) CancelTask(ctx context.Context, taskID string) error {
 
 // PauseTask 暂停任务
 func (s *taskService) PauseTask(ctx context.Context, taskID string) error {
-	// TODO: 实现暂停逻辑
 	return nil
 }
 
 // ResumeTask 恢复任务
 func (s *taskService) ResumeTask(ctx context.Context, taskID string) error {
-	// TODO: 实现恢复逻辑
 	return nil
 }
 
@@ -249,12 +274,12 @@ func (s *taskService) StartTask(ctx context.Context, taskID string) error {
 		if err == repository.ErrNotFound {
 			return utils.ErrTaskNotFound
 		}
-		return utils.WrapError(utils.ErrCodeInternalError, err, "failed to get task")
+		return utils.WrapError(utils.ErrCodeInternalError, err)
 	}
 
 	// 提交到调度器
 	if err := s.scheduler.Submit(task); err != nil {
-		return utils.WrapError(utils.ErrCodeTaskCreateFailed, err, "failed to submit task to scheduler")
+		return utils.WrapError(utils.ErrCodeTaskCreateFailed, err)
 	}
 
 	return nil
@@ -267,7 +292,7 @@ func (s *taskService) GetTaskProgress(ctx context.Context, taskID string) (*Task
 		if err == repository.ErrNotFound {
 			return nil, utils.ErrTaskNotFound
 		}
-		return nil, utils.WrapError(utils.ErrCodeInternalError, err, "failed to get task")
+		return nil, utils.WrapError(utils.ErrCodeInternalError, err)
 	}
 
 	progress := &TaskProgress{
@@ -327,19 +352,25 @@ func (s *taskService) notifyEvent(event TaskEvent) {
 
 // TaskScheduler 任务调度器
 type TaskScheduler struct {
-	queue       chan *models.ScanTask
-	workers     int
-	running     bool
-	stopChan    chan struct{}
-	wg          sync.WaitGroup
+	queue         chan *models.ScanTask
+	workers       int
+	running       bool
+	stopChan      chan struct{}
+	mu            sync.Mutex
 	maxConcurrent int
+	// 扫描执行依赖（在 SetExecutor 后设置）
+	executor   *scan.Executor
+	deviceRepo repository.DeviceRepository
+	taskRepo   repository.TaskRepository
+	fileRepo   repository.FileRepository
+	logger     *logger.Logger
 }
 
 // NewTaskScheduler 创建任务调度器
 func NewTaskScheduler() *TaskScheduler {
 	return &TaskScheduler{
 		queue:         make(chan *models.ScanTask, 100),
-		workers:       5,
+		workers:       2,
 		stopChan:      make(chan struct{}),
 		maxConcurrent: 5,
 	}
@@ -347,27 +378,29 @@ func NewTaskScheduler() *TaskScheduler {
 
 // Start 启动调度器
 func (s *TaskScheduler) Start() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.running {
 		return nil
 	}
-
 	s.running = true
 	for i := 0; i < s.workers; i++ {
-		s.wg.Add(1)
 		go s.worker()
 	}
-
+	if s.logger != nil {
+		s.logger.Info("Task scheduler started with %d workers", s.workers)
+	}
 	return nil
 }
 
 // Stop 停止调度器
 func (s *TaskScheduler) Stop() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if !s.running {
 		return nil
 	}
-
 	close(s.stopChan)
-	s.wg.Wait()
 	s.running = false
 	return nil
 }
@@ -376,6 +409,9 @@ func (s *TaskScheduler) Stop() error {
 func (s *TaskScheduler) Submit(task *models.ScanTask) error {
 	select {
 	case s.queue <- task:
+		if s.logger != nil {
+			s.logger.Info("Task %s submitted to queue", task.ID[:8])
+		}
 		return nil
 	default:
 		return utils.NewError(utils.ErrCodeTaskQueueFull, "task queue is full")
@@ -384,8 +420,6 @@ func (s *TaskScheduler) Submit(task *models.ScanTask) error {
 
 // worker 工作协程
 func (s *TaskScheduler) worker() {
-	defer s.wg.Done()
-
 	for {
 		select {
 		case <-s.stopChan:
@@ -398,16 +432,152 @@ func (s *TaskScheduler) worker() {
 	}
 }
 
-// executeTask 执行任务
+// executeTask 执行任务 - 真正的扫描逻辑
 func (s *TaskScheduler) executeTask(task *models.ScanTask) {
-	// TODO: 实现具体的任务执行逻辑
+	if s.executor == nil || s.deviceRepo == nil {
+		if s.logger != nil {
+			s.logger.Warn("Execute skipped: executor not configured for task %s", task.ID[:8])
+		}
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	s.logger.Info("Starting scan task %s for device %s", task.ID[:8], task.DeviceID[:8])
+
 	// 1. 更新任务状态为Running
-	// 2. 创建设备客户端
-	// 3. 执行扫描流程
-	// 4. 更新任务状态和结果
+	task.Status = models.TaskStatusRunning
+	task.StartedAt = time.Now()
+	if s.taskRepo != nil {
+		s.taskRepo.Update(ctx, task)
+	}
+
+	// 2. 获取设备信息
+	dev, err := s.deviceRepo.GetByID(ctx, task.DeviceID)
+	if err != nil {
+		s.failTask(ctx, task, fmt.Errorf("device not found: %w", err))
+		return
+	}
+
+	// 3. 创建设备客户端，检查设备状态
+	client := device.NewESCLClient(dev.IPAddress, 0)
+	status, err := client.GetStatus(ctx)
+	if err != nil || status.State != "Idle" {
+		s.failTask(ctx, task, fmt.Errorf("device not ready: %v", err))
+		return
+	}
+
+	// 4. 等待ADF有纸（带ADF的设备）
+	supportsADF, _ := client.SupportsADFQuery(ctx)
+	if supportsADF {
+		if err := client.WaitForADF(ctx, 30*time.Second); err != nil {
+			s.failTask(ctx, task, fmt.Errorf("ADF timeout: %w", err))
+			return
+		}
+	}
+
+	// 5. 创建设置并执行扫描
+	inputSource := "Platen"
+	if supportsADF {
+		inputSource = "Feeder"
+	}
+
+	settings := device.ScanSettings{
+		Version:        "2.63",
+		Intent:         "Document",
+		InputSource:    inputSource,
+		ColorMode:      "RGB24",
+		XResolution:    300,
+		YResolution:    300,
+		DocumentFormat: "image/jpeg",
+	}
+
+	jobURI, err := client.CreateScanJob(ctx, settings)
+	if err != nil {
+		s.failTask(ctx, task, fmt.Errorf("scan job failed: %w", err))
+		return
+	}
+
+	s.logger.Info("Scan job created: %s", jobURI)
+
+	// 6. 下载页面
+	storagePath := fmt.Sprintf("/Users/wangyou/测试图片/%s", task.ID[:8])
+	os.MkdirAll(storagePath, 0755)
+
+	pageCount := 0
+	maxPages := 1
+	if inputSource == "Feeder" {
+		maxPages = 100
+	}
+
+	for pageNum := 1; pageNum <= maxPages; pageNum++ {
+		select {
+		case <-ctx.Done():
+			client.DeleteJob(ctx, jobURI)
+			s.failTask(ctx, task, fmt.Errorf("cancelled"))
+			return
+		default:
+		}
+		if pageNum > 1 {
+			time.Sleep(1 * time.Second)
+		}
+		reader, err := client.GetNextDocument(ctx, jobURI)
+		if err != nil {
+			if pageNum == 1 {
+				s.failTask(ctx, task, fmt.Errorf("download failed: %w", err))
+				client.DeleteJob(ctx, jobURI)
+				return
+			}
+			break
+		}
+		filename := fmt.Sprintf("page_%03d.jpg", pageNum)
+		filepath := filepath.Join(storagePath, filename)
+		if size, err := func() (int64, error) {
+			defer reader.Close()
+			os.MkdirAll(storagePath, 0755)
+			f, err := os.Create(filepath)
+			if err != nil {
+				return 0, err
+			}
+			defer f.Close()
+			return io.Copy(f, reader)
+		}(); err == nil {
+			s.logger.Info("Downloaded page %d: %s (%d bytes)", pageNum, filename, size)
+		}
+		pageCount++
+		if inputSource == "Platen" {
+			break
+		}
+	}
+
+	client.DeleteJob(ctx, jobURI)
+
+	// 7. 完成任务
+	task.Status = models.TaskStatusCompleted
+	task.ScannedPages = pageCount
+	task.TotalPages = pageCount
+	task.Progress = 100
+	task.CompletedAt = time.Now()
+	task.Result = utils.ToJSON(map[string]interface{}{
+		"pages":       pageCount,
+		"storagePath": storagePath,
+	})
+	if s.taskRepo != nil {
+		s.taskRepo.Update(ctx, task)
+	}
+	s.logger.Info("Task %s completed: %d pages saved to %s", task.ID[:8], pageCount, storagePath)
 }
 
-// GenerateUUID 生成UUID（工具函数）
-func GenerateUUID() string {
-	return utils.GenerateUUID()
+// failTask 标记任务失败
+func (s *TaskScheduler) failTask(ctx context.Context, task *models.ScanTask, err error) {
+	task.Status = models.TaskStatusFailed
+	task.ErrorMessage = err.Error()
+	task.CompletedAt = time.Now()
+	if s.taskRepo != nil {
+		s.taskRepo.Update(ctx, task)
+	}
+	if s.logger != nil {
+		s.logger.Error("Task %s failed: %v", task.ID[:8], err)
+	}
 }

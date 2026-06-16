@@ -8,6 +8,8 @@ import (
 	"auto-scan/internal/service/taskservice"
 	"auto-scan/pkg/config"
 	"auto-scan/pkg/logger"
+	"auto-scan/internal/core/scan"
+	"context"
 	"database/sql"
 	"time"
 
@@ -33,7 +35,11 @@ func SetupRouter(db *sql.DB, log *logger.Logger, cfg *config.Config) *gin.Engine
 
 	// 初始化Service层
 	deviceService, _ := deviceservice.NewDeviceService(deviceRepo, log)
-	taskService := taskservice.NewTaskService(taskRepo, deviceRepo, log)
+	scanExecutor := scan.NewExecutor(log)
+	taskService := taskservice.NewTaskServiceWithExecutor(taskRepo, deviceRepo, scanExecutor, fileRepo, log)
+
+	// 启动任务调度器（后台执行扫描）
+	taskService.StartScheduler(context.Background())
 
 	cfgManager, _ := config.NewManager("config.yaml")
 	systemService := systemservice.NewSystemService(cfgManager, deviceRepo, taskRepo, fileRepo, log)

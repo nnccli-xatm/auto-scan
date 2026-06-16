@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Device 设备模型
 type Device struct {
@@ -49,3 +52,35 @@ const (
 	VendorEpson    = "Epson"
 	VendorOther    = "Other"
 )
+
+// NormalizeVendor 规范化厂商字段，不匹配时返回Other
+func NormalizeVendor(v string) string {
+	valid := map[string]bool{
+		"HP": true, "Canon": true, "Ricoh": true,
+		"Fujitsu": true, "Brother": true, "Epson": true,
+	}
+	if valid[v] {
+		return v
+	}
+	// 部分匹配
+	upper := strings.ToUpper(v)
+	if strings.Contains(upper, "HP") {
+		return "HP"
+	}
+	if strings.Contains(upper, "CANON") {
+		return "Canon"
+	}
+	if strings.Contains(upper, "RICOH") {
+		return "Ricoh"
+	}
+	if strings.Contains(upper, "FUJITSU") {
+		return "Fujitsu"
+	}
+	if strings.Contains(upper, "BROTHER") {
+		return "Brother"
+	}
+	if strings.Contains(upper, "EPSON") {
+		return "Epson"
+	}
+	return "Other"
+}

@@ -106,7 +106,7 @@ type deviceService struct {
 func NewDeviceService(repo repository.DeviceRepository, log *logger.Logger) (DeviceService, error) {
 	discovery, err := device.NewDiscoveryService()
 	if err != nil {
-		return nil, utils.WrapError(utils.ErrCodeInternalError, err, "failed to create discovery service")
+		return nil, utils.WrapError(utils.ErrCodeInternalError, err)
 	}
 
 	return &deviceService{
@@ -121,19 +121,13 @@ func NewDeviceService(repo repository.DeviceRepository, log *logger.Logger) (Dev
 
 // DiscoverDevices 发现设备
 func (s *deviceService) DiscoverDevices(ctx context.Context) ([]*models.Device, error) {
-	// 启动发现服务
-	if err := s.discovery.Start(); err != nil {
-		return nil, utils.WrapError(utils.ErrCodeInternalError, err, "failed to start discovery")
-	}
-	defer s.discovery.Stop()
-
-	// 执行一次发现（5秒超时）
+	// 直接执行一次发现（5秒超时），不要Start/Stop，DiscoverOnce内部会创建独立上下文
 	discovered, err := s.discovery.DiscoverOnce(ctx, 5*time.Second)
 	if err != nil {
-		return nil, utils.WrapError(utils.ErrCodeInternalError, err, "discovery failed")
+		return nil, utils.WrapError(utils.ErrCodeInternalError, err)
 	}
 
-	// 转换为Device模型
+	// 转换为Device模型并保存到数据库
 	devices := make([]*models.Device, 0, len(discovered))
 	for _, d := range discovered {
 		dev := &models.Device{
@@ -158,6 +152,13 @@ func (s *deviceService) DiscoverDevices(ctx context.Context) ([]*models.Device, 
 			})
 		}
 
+		// 保存设备到数据库
+		if err := s.repo.Create(ctx, dev); err == nil {
+			s.logger.Audit(utils.AuditEventDeviceCreated, "", dev.ID, "", "Device auto-discovered", nil)
+		} else {
+			s.logger.Warn("Failed to save discovered device %s: %v", d.IP, err)
+		}
+
 		devices = append(devices, dev)
 	}
 
@@ -180,6 +181,7 @@ func (s *deviceService) AddDevice(ctx context.Context, req AddDeviceRequest) (*m
 		IPAddress: req.IPAddress,
 		Protocol:  req.Protocol,
 		Status:    models.DeviceStatusOffline,
+		Vendor:    "Other",
 	}
 
 	// 尝试连接并获取信息
@@ -197,7 +199,7 @@ func (s *deviceService) AddDevice(ctx context.Context, req AddDeviceRequest) (*m
 
 		// 解析厂商
 		for _, v := range []string{"HP", "Canon", "Ricoh", "Fujitsu", "Brother", "Epson"} {
-			if utils.ContainsString(caps.MakeAndModel, v) {
+			if utils.ContainsString([]string{caps.MakeAndModel}, v) {
 				dev.Vendor = v
 				break
 			}
@@ -206,7 +208,7 @@ func (s *deviceService) AddDevice(ctx context.Context, req AddDeviceRequest) (*m
 
 	// 保存到数据库
 	if err := s.repo.Create(ctx, dev); err != nil {
-		return nil, utils.WrapError(utils.ErrCodeInternalError, err, "failed to create device")
+		return nil, utils.WrapError(utils.ErrCodeInternalError, err)
 	}
 
 	s.logger.Audit(utils.AuditEventDeviceCreated, "", dev.ID, "", "Device created", nil)
@@ -220,7 +222,7 @@ func (s *deviceService) GetDevice(ctx context.Context, deviceID string) (*models
 		if err == repository.ErrNotFound {
 			return nil, utils.ErrDeviceNotFound
 		}
-		return nil, utils.WrapError(utils.ErrCodeInternalError, err, "failed to get device")
+		return nil, utils.WrapError(utils.ErrCodeInternalError, err)
 	}
 	return dev, nil
 }
@@ -232,7 +234,7 @@ func (s *deviceService) UpdateDevice(ctx context.Context, deviceID string, req U
 		if err == repository.ErrNotFound {
 			return nil, utils.ErrDeviceNotFound
 		}
-		return nil, utils.WrapError(utils.ErrCodeInternalError, err, "failed to get device")
+		return nil, utils.WrapError(utils.ErrCodeInternalError, err)
 	}
 
 	// 更新字段
@@ -244,7 +246,7 @@ func (s *deviceService) UpdateDevice(ctx context.Context, deviceID string, req U
 	}
 
 	if err := s.repo.Update(ctx, dev); err != nil {
-		return nil, utils.WrapError(utils.ErrCodeInternalError, err, "failed to update device")
+		return nil, utils.WrapError(utils.ErrCodeInternalError, err)
 	}
 
 	s.logger.Audit(utils.AuditEventDeviceUpdated, "", deviceID, "", "Device updated", nil)
@@ -258,7 +260,7 @@ func (s *deviceService) DeleteDevice(ctx context.Context, deviceID string) error
 		if err == repository.ErrNotFound {
 			return utils.ErrDeviceNotFound
 		}
-		return utils.WrapError(utils.ErrCodeInternalError, err, "failed to get device")
+		return utils.WrapError(utils.ErrCodeInternalError, err)
 	}
 
 	// 断开连接
@@ -266,7 +268,7 @@ func (s *deviceService) DeleteDevice(ctx context.Context, deviceID string) error
 
 	// 删除设备
 	if err := s.repo.Delete(ctx, deviceID); err != nil {
-		return utils.WrapError(utils.ErrCodeInternalError, err, "failed to delete device")
+		return utils.WrapError(utils.ErrCodeInternalError, err)
 	}
 
 	s.logger.Audit(utils.AuditEventDeviceDeleted, "", deviceID, "", "Device deleted", nil)
@@ -292,7 +294,7 @@ func (s *deviceService) ListDevices(ctx context.Context, filter ListDeviceFilter
 
 	devices, total, err := s.repo.List(ctx, repoFilter)
 	if err != nil {
-		return nil, 0, utils.WrapError(utils.ErrCodeInternalError, err, "failed to list devices")
+		return nil, 0, utils.WrapError(utils.ErrCodeInternalError, err)
 	}
 
 	return devices, total, nil
@@ -305,7 +307,7 @@ func (s *deviceService) ConnectDevice(ctx context.Context, deviceID string) erro
 		if err == repository.ErrNotFound {
 			return utils.ErrDeviceNotFound
 		}
-		return utils.WrapError(utils.ErrCodeInternalError, err, "failed to get device")
+		return utils.WrapError(utils.ErrCodeInternalError, err)
 	}
 
 	// 创建客户端
@@ -314,7 +316,7 @@ func (s *deviceService) ConnectDevice(ctx context.Context, deviceID string) erro
 	// 测试连接
 	_, err = client.GetCapabilities(ctx)
 	if err != nil {
-		return utils.WrapError(utils.ErrCodeDeviceConnectFailed, err, "failed to connect device")
+		return utils.WrapError(utils.ErrCodeDeviceConnectFailed, err)
 	}
 
 	// 保存客户端
@@ -360,7 +362,7 @@ func (s *deviceService) GetDeviceStatus(ctx context.Context, deviceID string) (*
 		if err == repository.ErrNotFound {
 			return nil, utils.ErrDeviceNotFound
 		}
-		return nil, utils.WrapError(utils.ErrCodeInternalError, err, "failed to get device")
+		return nil, utils.WrapError(utils.ErrCodeInternalError, err)
 	}
 
 	status := &DeviceStatus{
