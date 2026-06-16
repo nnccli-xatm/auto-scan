@@ -6,7 +6,6 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -47,7 +46,7 @@ func main() {
 	defer db.Close()
 
 	// 初始化路由
-	router := routes.SetupRouter(db, log)
+	router := routes.SetupRouter(db.DB, log)
 
 	// 创建HTTP服务器
 	srv := &http.Server{

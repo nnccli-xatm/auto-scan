@@ -39,6 +39,8 @@ const (
 	ErrCodeTaskCancelFailed   = 1002003
 	ErrCodeTaskAlreadyRunning = 1002004
 	ErrCodeTaskQueueFull      = 1002005
+	ErrCodeTaskCancelled      = 1002006
+	ErrCodeTaskFailed         = 1002007
 
 	// 文件相关错误 3000-3999
 	ErrCodeFileNotFound       = 1003001
@@ -46,6 +48,20 @@ const (
 	ErrCodeFileDeleteFailed   = 1003003
 	ErrCodeFileUploadFailed   = 1003004
 	ErrCodeStorageFull        = 1003005
+
+	// 审计事件常量（从logger包同步）
+	AuditEventDeviceCreated   = "device.created"
+	AuditEventDeviceUpdated   = "device.updated"
+	AuditEventDeviceDeleted   = "device.deleted"
+	AuditEventDeviceConnected = "device.connected"
+	AuditEventTaskCreated     = "task.created"
+	AuditEventTaskStarted     = "task.started"
+	AuditEventTaskCompleted   = "task.completed"
+	AuditEventTaskFailed      = "task.failed"
+	AuditEventTaskCancelled   = "task.cancelled"
+	AuditEventFileDownloaded  = "file.downloaded"
+	AuditEventFileDeleted     = "file.deleted"
+	AuditEventConfigUpdated   = "config.updated"
 )
 
 // 错误码映射表
@@ -194,6 +210,7 @@ var (
 	ErrValidationFailed   = NewError(ErrCodeValidationFailed, "")
 	ErrTooManyRequests    = NewError(ErrCodeTooManyRequests, "")
 	ErrInternalError      = NewError(ErrCodeInternalError, "")
+	ErrDeviceExists       = NewError(ErrCodeDeviceExists, "")
 	ErrServiceUnavailable = NewError(ErrCodeServiceUnavailable, "")
 )
 

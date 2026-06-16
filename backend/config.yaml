@@ -1,0 +1,38 @@
+server:
+  port: 8080
+  host: "0.0.0.0"
+  read_timeout: 30s
+  write_timeout: 30s
+
+database:
+  path: "../data/auto-scan.db"
+  max_open_conns: 1
+  max_idle_conns: 1
+  conn_max_lifetime: 1h
+
+storage:
+  path: "../data/scans"
+  max_size: 10737418240
+  backup_enabled: false
+  backup_path: ""
+
+scan:
+  default_resolution: 300
+  default_color_mode: "Color"
+  max_concurrent: 5
+  max_retries: 3
+  timeout: 5m
+
+device:
+  monitor_interval: 2s
+  auto_discover: true
+  discover_interval: 5m
+
+log:
+  level: "info"
+  format: "json"
+  output: "stdout"
+  file_path: "../logs/auto-scan.log"
+  max_size: 100
+  max_backups: 3
+  max_age: 7
